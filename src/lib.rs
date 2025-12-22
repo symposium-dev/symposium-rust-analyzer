@@ -16,18 +16,23 @@ pub async fn run() -> Result<()> {
 
     tracing::info!("Starting rust-analyzer-proxy");
 
-    RustAnalyzerProxy.serve(sacp_tokio::Stdio::new()).await?;
+    RustAnalyzerProxy::default()
+        .serve(sacp_tokio::Stdio::new())
+        .await?;
 
     Ok(())
 }
 
-pub struct RustAnalyzerProxy;
+#[derive(Default)]
+pub struct RustAnalyzerProxy {
+    pub workspace_path: Option<String>,
+}
 
 impl Component for RustAnalyzerProxy {
     async fn serve(self, client: impl Component) -> Result<(), sacp::Error> {
         ProxyToConductor::builder()
             .name("rust-analyzer-proxy")
-            .with_mcp_server(rust_analyzer_proxy::build_server())
+            .with_mcp_server(rust_analyzer_proxy::build_server(self.workspace_path).await?)
             .serve(client)
             .await
     }

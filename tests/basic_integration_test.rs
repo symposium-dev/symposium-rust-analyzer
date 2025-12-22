@@ -12,8 +12,10 @@ fn get_test_project_path() -> PathBuf {
 
 #[tokio::test]
 async fn test_rust_analyzer_proxy_creation() -> Result<()> {
-    let proxy = RustAnalyzerProxy;
     let test_project = get_test_project_path();
+    let proxy = RustAnalyzerProxy {
+        workspace_path: Some(test_project.display().to_string()),
+    };
 
     let result = yopo::prompt(
         Conductor::new(
@@ -38,7 +40,10 @@ async fn test_rust_analyzer_proxy_creation() -> Result<()> {
 
 #[tokio::test]
 async fn test_analyzer_workspace_diagnostics() -> Result<()> {
-    let proxy = RustAnalyzerProxy;
+    let test_project = get_test_project_path();
+    let proxy = RustAnalyzerProxy {
+        workspace_path: Some(test_project.display().to_string()),
+    };
 
     let conductor = Conductor::new(
         "test-conductor".to_string(),

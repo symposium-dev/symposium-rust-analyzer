@@ -86,7 +86,7 @@ where
     F: AsyncFnOnce(&LspBridge) -> Result<R>,
 {
     let mut bridge_guard = bridge.lock().await;
-    if bridge_guard.is_none() {
+    if bridge_guard.is_none() || workspace_path.is_some() {
         let workspace = workspace_path
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -136,10 +136,13 @@ async fn ensure_document_open(bridge: &LspBridge, file_path: &str) -> Result<Str
     Ok(uri)
 }
 
-pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<ProxyToConductor>> {
+pub async fn build_server(
+    workspace_path: Option<String>,
+) -> Result<McpServer<ProxyToConductor, impl sacp::JrResponder<ProxyToConductor>>> {
     let bridge: BridgeType = Arc::new(Mutex::new(None));
+    with_bridge(&bridge, workspace_path.as_deref(), async |_lsp| Ok(())).await?;
 
-    McpServer::builder("rust-analyzer-mcp".to_string())
+    let server = McpServer::builder("rust-analyzer-mcp".to_string())
         .instructions(indoc::indoc! {"
             Rust analyzer LSP integration for code analysis, navigation, and diagnostics.
         "})
@@ -342,5 +345,7 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             },
             sacp::tool_fn_mut!(),
         )
-        .build()
+        .build();
+
+    Ok(server)
 }
