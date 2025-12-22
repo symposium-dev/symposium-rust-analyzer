@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::anyhow;
 use lsp_bridge::{LspBridge, LspServerConfig};
 use lsp_types::{CodeActionContext, Position, Range};
 use sacp::{ProxyToConductor, mcp_server::McpServer};
@@ -8,6 +8,8 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+type Result<T> = std::result::Result<T, sacp::Error>;
 
 struct SafeLspBridge(Option<LspBridge>);
 
@@ -79,7 +81,10 @@ struct EmptyInputs {}
 
 const SERVER_ID: &str = "rust-analyzer";
 
-async fn ensure_bridge(bridge: &BridgeType, workspace_path: Option<&str>) -> Result<()> {
+async fn with_bridge<F, R>(bridge: &BridgeType, workspace_path: Option<&str>, f: F) -> Result<R>
+where
+    F: AsyncFnOnce(&LspBridge) -> Result<R>,
+{
     let mut bridge_guard = bridge.lock().await;
     if bridge_guard.is_none() {
         let workspace = workspace_path
@@ -105,7 +110,7 @@ async fn ensure_bridge(bridge: &BridgeType, workspace_path: Option<&str>) -> Res
             .map_err(|e| anyhow!("Server failed to become ready: {}", e))?;
         *bridge_guard = Some(SafeLspBridge::new(lsp_bridge));
     }
-    Ok(())
+    f(bridge_guard.as_ref().unwrap()).await
 }
 
 fn file_path_to_uri(file_path: &str) -> String {
@@ -144,15 +149,13 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    let bridge_guard = bridge.lock().await;
-                    let lsp = bridge_guard.as_ref().ok_or_else(|| anyhow!("LSP bridge not initialized"))?;
-
-                    let uri = ensure_document_open(lsp, &input.file_path).await?;
-                    let position = Position::new(input.line, input.character);
-                    let result = lsp.get_hover(SERVER_ID, &uri, position).await
-                        .map_err(|e| anyhow!("Hover request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge(&bridge, None,  async move |lsp| {
+                        let uri = ensure_document_open(lsp, &input.file_path).await?;
+                        let position = Position::new(input.line, input.character);
+                        let result = lsp.get_hover(SERVER_ID, &uri, position).await
+                            .map_err(|e| anyhow!("Hover request failed: {}", e))?;
+                        Ok(serde_json::to_string(&result)?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -163,15 +166,13 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    let bridge_guard = bridge.lock().await;
-                    let lsp = bridge_guard.as_ref().ok_or_else(|| anyhow!("LSP bridge not initialized"))?;
-
-                    let uri = file_path_to_uri(&input.file_path);
-                    let position = Position::new(input.line, input.character);
-                    let result = lsp.go_to_definition(SERVER_ID, &uri, position).await
-                        .map_err(|e| anyhow!("Definition request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge(&bridge, None, async move |lsp| {
+                        let uri = file_path_to_uri(&input.file_path);
+                        let position = Position::new(input.line, input.character);
+                        let result = lsp.go_to_definition(SERVER_ID, &uri, position).await
+                            .map_err(|e| anyhow!("Definition request failed: {}", e))?;
+                        Ok(serde_json::to_string(&result)?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -182,15 +183,13 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    let bridge_guard = bridge.lock().await;
-                    let lsp = bridge_guard.as_ref().ok_or_else(|| anyhow!("LSP bridge not initialized"))?;
-
-                    let uri = file_path_to_uri(&input.file_path);
-                    let position = Position::new(input.line, input.character);
-                    let result = lsp.find_references(SERVER_ID, &uri, position).await
-                        .map_err(|e| anyhow!("References request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge(&bridge, None, async move |lsp| {
+                        let uri = file_path_to_uri(&input.file_path);
+                        let position = Position::new(input.line, input.character);
+                        let result = lsp.find_references(SERVER_ID, &uri, position).await
+                            .map_err(|e| anyhow!("References request failed: {}", e))?;
+                        Ok(serde_json::to_string(&result)?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -201,15 +200,13 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    let bridge_guard = bridge.lock().await;
-                    let lsp = bridge_guard.as_ref().ok_or_else(|| anyhow!("LSP bridge not initialized"))?;
-
-                    let uri = file_path_to_uri(&input.file_path);
-                    let position = Position::new(input.line, input.character);
-                    let result = lsp.get_completions(SERVER_ID, &uri, position).await
-                        .map_err(|e| anyhow!("Completion request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge(&bridge, None, async move |lsp| {
+                        let uri = file_path_to_uri(&input.file_path);
+                        let position = Position::new(input.line, input.character);
+                        let result = lsp.get_completions(SERVER_ID, &uri, position).await
+                            .map_err(|e| anyhow!("Completion request failed: {}", e))?;
+                        Ok(serde_json::to_string(&result)?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -220,14 +217,12 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |input: FileOnlyInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    let bridge_guard = bridge.lock().await;
-                    let lsp = bridge_guard.as_ref().ok_or_else(|| anyhow!("LSP bridge not initialized"))?;
-
-                    let uri = file_path_to_uri(&input.file_path);
-                    let result = lsp.get_document_symbols(SERVER_ID, &uri).await
-                        .map_err(|e| anyhow!("Document symbols request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge(&bridge, None, async move |lsp| {
+                        let uri = file_path_to_uri(&input.file_path);
+                        let result = lsp.get_document_symbols(SERVER_ID, &uri).await
+                            .map_err(|e| anyhow!("Document symbols request failed: {}", e))?;
+                        Ok(serde_json::to_string(&result)?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -238,14 +233,12 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |input: FileOnlyInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    let bridge_guard = bridge.lock().await;
-                    let lsp = bridge_guard.as_ref().ok_or_else(|| anyhow!("LSP bridge not initialized"))?;
-
-                    let uri = file_path_to_uri(&input.file_path);
-                    let result = lsp.format_document(SERVER_ID, &uri).await
-                        .map_err(|e| anyhow!("Format request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge(&bridge, None, async move |lsp| {
+                        let uri = file_path_to_uri(&input.file_path);
+                        let result = lsp.format_document(SERVER_ID, &uri).await
+                            .map_err(|e| anyhow!("Format request failed: {}", e))?;
+                        Ok(serde_json::to_string(&result)?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -256,23 +249,21 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |input: RangeInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    let bridge_guard = bridge.lock().await;
-                    let lsp = bridge_guard.as_ref().ok_or_else(|| anyhow!("LSP bridge not initialized"))?;
-
-                    let uri = file_path_to_uri(&input.file_path);
-                    let range = Range::new(
-                        Position::new(input.line, input.character),
-                        Position::new(input.end_line, input.end_character)
-                    );
-                    let context = CodeActionContext {
-                        diagnostics: vec![],
-                        only: None,
-                        trigger_kind: None,
-                    };
-                    let result = lsp.get_code_actions(SERVER_ID, &uri, range, context).await
-                        .map_err(|e| anyhow!("Code actions request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge(&bridge, None, async move |lsp| {
+                        let uri = file_path_to_uri(&input.file_path);
+                        let range = Range::new(
+                            Position::new(input.line, input.character),
+                            Position::new(input.end_line, input.end_character)
+                        );
+                        let context = CodeActionContext {
+                            diagnostics: vec![],
+                            only: None,
+                            trigger_kind: None,
+                        };
+                        let result = lsp.get_code_actions(SERVER_ID, &uri, range, context).await
+                            .map_err(|e| anyhow!("Code actions request failed: {}", e))?;
+                        Ok(serde_json::to_string(&result)?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -283,8 +274,9 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |input: WorkspaceInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, Some(&input.workspace_path)).await?;
-                    Ok("Workspace set successfully".to_string())
+                    with_bridge(&bridge, Some(&input.workspace_path), async move |_lsp| {
+                        Ok("Workspace set successfully".to_string())
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -295,14 +287,12 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |input: FileOnlyInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    let bridge_guard = bridge.lock().await;
-                    let lsp = bridge_guard.as_ref().ok_or_else(|| anyhow!("LSP bridge not initialized"))?;
-
-                    let uri = file_path_to_uri(&input.file_path);
-                    let result = lsp.get_diagnostics(SERVER_ID, &uri)
-                        .map_err(|e| anyhow!("Diagnostics request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge(&bridge, None, async move |lsp| {
+                        let uri = file_path_to_uri(&input.file_path);
+                        let result = lsp.get_diagnostics(SERVER_ID, &uri)
+                            .map_err(|e| anyhow!("Diagnostics request failed: {}", e))?;
+                        Ok(serde_json::to_string(&result)?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -313,10 +303,11 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |_input: EmptyInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    // For workspace diagnostics, we'll return an empty array for now
-                    // as lsp-bridge doesn't have a direct workspace diagnostics method
-                    Ok(serde_json::to_string(&Vec::<serde_json::Value>::new())?)
+                    with_bridge(&bridge, None, async move |_lsp| {
+                        // For workspace diagnostics, we'll return an empty array for now
+                        // as lsp-bridge doesn't have a direct workspace diagnostics method
+                        Ok(serde_json::to_string(&Vec::<serde_json::Value>::new())?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -327,10 +318,11 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |_input: FilePositionInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    // This is a rust-analyzer specific extension that may not be available in lsp-bridge
-                    // Return empty result for now
-                    Ok(serde_json::to_string(&serde_json::Value::Null)?)
+                    with_bridge(&bridge, None, async move |_lsp| {
+                        // This is a rust-analyzer specific extension that may not be available in lsp-bridge
+                        // Return empty result for now
+                        Ok(serde_json::to_string(&serde_json::Value::Null)?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -341,10 +333,11 @@ pub fn build_server() -> McpServer<ProxyToConductor, impl sacp::JrResponder<Prox
             {
                 let bridge = bridge.clone();
                 async move |_input: GoalIndexInputs, _mcp_cx| {
-                    ensure_bridge(&bridge, None).await?;
-                    // This is a rust-analyzer specific extension that may not be available in lsp-bridge
-                    // Return empty result for now
-                    Ok(serde_json::to_string(&serde_json::Value::Null)?)
+                    with_bridge(&bridge, None, async move |_lsp| {
+                        // This is a rust-analyzer specific extension that may not be available in lsp-bridge
+                        // Return empty result for now
+                        Ok(serde_json::to_string(&serde_json::Value::Null)?)
+                    }).await
                 }
             },
             sacp::tool_fn_mut!(),
