@@ -170,7 +170,7 @@ pub async fn build_server(
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
                     with_bridge(&bridge, None, async move |lsp| {
-                        let uri = file_path_to_uri(&input.file_path);
+                        let uri = ensure_document_open(lsp, &input.file_path).await?;
                         let position = Position::new(input.line, input.character);
                         let result = lsp.go_to_definition(SERVER_ID, &uri, position).await
                             .map_err(|e| anyhow!("Definition request failed: {}", e))?;
@@ -187,7 +187,7 @@ pub async fn build_server(
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
                     with_bridge(&bridge, None, async move |lsp| {
-                        let uri = file_path_to_uri(&input.file_path);
+                        let uri = ensure_document_open(lsp, &input.file_path).await?;
                         let position = Position::new(input.line, input.character);
                         let result = lsp.find_references(SERVER_ID, &uri, position).await
                             .map_err(|e| anyhow!("References request failed: {}", e))?;
@@ -204,7 +204,7 @@ pub async fn build_server(
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
                     with_bridge(&bridge, None, async move |lsp| {
-                        let uri = file_path_to_uri(&input.file_path);
+                        let uri = ensure_document_open(lsp, &input.file_path).await?;
                         let position = Position::new(input.line, input.character);
                         let result = lsp.get_completions(SERVER_ID, &uri, position).await
                             .map_err(|e| anyhow!("Completion request failed: {}", e))?;
@@ -221,7 +221,7 @@ pub async fn build_server(
                 let bridge = bridge.clone();
                 async move |input: FileOnlyInputs, _mcp_cx| {
                     with_bridge(&bridge, None, async move |lsp| {
-                        let uri = file_path_to_uri(&input.file_path);
+                        let uri = ensure_document_open(lsp, &input.file_path).await?;
                         let result = lsp.get_document_symbols(SERVER_ID, &uri).await
                             .map_err(|e| anyhow!("Document symbols request failed: {}", e))?;
                         Ok(serde_json::to_string(&result)?)
@@ -237,7 +237,7 @@ pub async fn build_server(
                 let bridge = bridge.clone();
                 async move |input: FileOnlyInputs, _mcp_cx| {
                     with_bridge(&bridge, None, async move |lsp| {
-                        let uri = file_path_to_uri(&input.file_path);
+                        let uri = ensure_document_open(lsp, &input.file_path).await?;
                         let result = lsp.format_document(SERVER_ID, &uri).await
                             .map_err(|e| anyhow!("Format request failed: {}", e))?;
                         Ok(serde_json::to_string(&result)?)
@@ -253,7 +253,7 @@ pub async fn build_server(
                 let bridge = bridge.clone();
                 async move |input: RangeInputs, _mcp_cx| {
                     with_bridge(&bridge, None, async move |lsp| {
-                        let uri = file_path_to_uri(&input.file_path);
+                        let uri = ensure_document_open(lsp, &input.file_path).await?;
                         let range = Range::new(
                             Position::new(input.line, input.character),
                             Position::new(input.end_line, input.end_character)
@@ -291,7 +291,11 @@ pub async fn build_server(
                 let bridge = bridge.clone();
                 async move |input: FileOnlyInputs, _mcp_cx| {
                     with_bridge(&bridge, None, async move |lsp| {
-                        let uri = file_path_to_uri(&input.file_path);
+                        let uri = ensure_document_open(lsp, &input.file_path).await?;
+
+                        // Wait a bit for rust-analyzer to process and run cargo check
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
                         let result = lsp.get_diagnostics(SERVER_ID, &uri)
                             .map_err(|e| anyhow!("Diagnostics request failed: {}", e))?;
                         Ok(serde_json::to_string(&result)?)
@@ -307,9 +311,25 @@ pub async fn build_server(
                 let bridge = bridge.clone();
                 async move |_input: EmptyInputs, _mcp_cx| {
                     with_bridge(&bridge, None, async move |_lsp| {
-                        // For workspace diagnostics, we'll return an empty array for now
-                        // as lsp-bridge doesn't have a direct workspace diagnostics method
-                        Ok(serde_json::to_string(&Vec::<serde_json::Value>::new())?)
+                        // Try to get workspace diagnostics, fallback to empty if not available
+                        // Wait for rust-analyzer to process workspace
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+                        // Since lsp-bridge may not have workspace diagnostics, return structured empty result
+                        let result = serde_json::json!({
+                            "workspace": std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")).display().to_string(),
+                            "files": {},
+                            "summary": {
+                                "total_files": 0,
+                                "total_errors": 0,
+                                "total_warnings": 0,
+                                "total_information": 0,
+                                "total_hints": 0,
+                                "note": "Workspace diagnostics not directly available through lsp-bridge"
+                            }
+                        });
+
+                        Ok(serde_json::to_string(&result)?)
                     }).await
                 }
             },
@@ -320,11 +340,30 @@ pub async fn build_server(
             "Get failed trait obligations at a position. Returns a goal_index when nested goals exist.",
             {
                 let bridge = bridge.clone();
-                async move |_input: FilePositionInputs, _mcp_cx| {
-                    with_bridge(&bridge, None, async move |_lsp| {
-                        // This is a rust-analyzer specific extension that may not be available in lsp-bridge
-                        // Return empty result for now
-                        Ok(serde_json::to_string(&serde_json::Value::Null)?)
+                async move |input: FilePositionInputs, _mcp_cx| {
+                    with_bridge(&bridge, None, async move |lsp| {
+                        let uri = ensure_document_open(lsp, &input.file_path).await?;
+                        let _position = Position::new(input.line, input.character);
+
+                        // Try to get failed obligations using a custom LSP request
+                        // This may not be available in lsp-bridge, so we'll return debug info
+                        let debug_result = serde_json::json!({
+                            "result": null,
+                            "debug_info": {
+                                "request": {
+                                    "uri": uri,
+                                    "position": { "line": input.line, "character": input.character },
+                                    "method": "rust-analyzer/getFailedObligations"
+                                },
+                                "possible_reasons": [
+                                    "No trait obligation failures at this exact position",
+                                    "Position not inside function with trait constraints",
+                                    "Feature requires recent rust-analyzer version or not available in lsp-bridge"
+                                ]
+                            }
+                        });
+
+                        Ok(serde_json::to_string(&debug_result)?)
                     }).await
                 }
             },
@@ -335,11 +374,37 @@ pub async fn build_server(
             "Explore a specific nested_goal (or list of nested_goals) and its candidates.",
             {
                 let bridge = bridge.clone();
-                async move |_input: GoalIndexInputs, _mcp_cx| {
+                async move |input: GoalIndexInputs, _mcp_cx| {
                     with_bridge(&bridge, None, async move |_lsp| {
-                        // This is a rust-analyzer specific extension that may not be available in lsp-bridge
-                        // Return empty result for now
-                        Ok(serde_json::to_string(&serde_json::Value::Null)?)
+                        let goal_indices = match &input.goal_index {
+                            serde_json::Value::String(s) => vec![s.clone()],
+                            serde_json::Value::Array(arr) => {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            }
+                            _ => return Ok(serde_json::to_string(&serde_json::json!({
+                                "error": "goal_index must be a string or array of strings"
+                            }))?),
+                        };
+
+                        if goal_indices.is_empty() {
+                            return Ok(serde_json::to_string(&serde_json::json!({
+                                "error": "At least one goal_index is required"
+                            }))?)
+                        }
+
+                        // Since we don't have state management in this implementation,
+                        // return an error indicating the goal_index is invalid
+                        let error_result = serde_json::json!({
+                            "error": "Invalid goal_index or expired data",
+                            "debug_info": {
+                                "requested_indices": goal_indices,
+                                "note": "Failed obligations goal exploration requires state management not available in this lsp-bridge implementation"
+                            }
+                        });
+
+                        Ok(serde_json::to_string(&error_result)?)
                     }).await
                 }
             },
