@@ -1,6 +1,6 @@
 # Symposium Rust Analyzer
 
-An ACP (Agent Communication Protocol) proxy that wraps an MCP (Model Context Protocol) server to provide rust-analyzer LSP integration.
+An ACP (Agent Communication Protocol) proxy that wraps an MCP server to provide rust-analyzer LSP integration.
 
 Part of the [Symposium](https://github.com/symposium-dev) project.
 

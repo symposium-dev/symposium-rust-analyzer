@@ -1,27 +1,9 @@
-mod rust_analyzer_proxy;
+mod rust_analyzer_mcp;
 
 use anyhow::Result;
+pub use rust_analyzer_mcp::build_server;
 use sacp::ProxyToConductor;
 use sacp::component::Component;
-
-/// Run the proxy as a standalone binary connected to stdio
-pub async fn run() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
-    tracing::info!("Starting rust-analyzer-proxy");
-
-    RustAnalyzerProxy::default()
-        .serve(sacp_tokio::Stdio::new())
-        .await?;
-
-    Ok(())
-}
 
 #[derive(Default)]
 pub struct RustAnalyzerProxy {
@@ -32,7 +14,7 @@ impl Component for RustAnalyzerProxy {
     async fn serve(self, client: impl Component) -> Result<(), sacp::Error> {
         ProxyToConductor::builder()
             .name("rust-analyzer-proxy")
-            .with_mcp_server(rust_analyzer_proxy::build_server(self.workspace_path).await?)
+            .with_mcp_server(build_server(self.workspace_path).await?)
             .serve(client)
             .await
     }

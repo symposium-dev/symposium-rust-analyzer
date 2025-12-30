@@ -2,6 +2,11 @@
 name = "symposium-rust-analyzer"
 version = "0.1.0"
 edition = "2024"
+license = "MIT or Apache-2.0"
+description = "Symposium rust-analyzer proxy - an MCP server connecting to rust-analyzer and a ACP Proxy managing it"
+repository = "https://github.com/symposium-dev/symposium-rust-analyzer"
+readme = "README.md"
+
 
 [dependencies]
 anyhow = "1.0.100"

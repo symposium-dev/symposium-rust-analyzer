@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-type Result<T> = std::result::Result<T, sacp::Error>;
+pub type Result<T> = std::result::Result<T, sacp::Error>;
 
 struct SafeLspBridge(Option<LspBridge>);
 
