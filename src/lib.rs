@@ -1,7 +1,10 @@
+mod failed_obligations;
 mod rust_analyzer_mcp;
 
 use anyhow::Result;
-pub use rust_analyzer_mcp::build_server;
+pub use rust_analyzer_mcp::{
+    BridgeState, BridgeType, SERVER_ID, build_server, with_bridge_and_document,
+};
 use sacp::ProxyToConductor;
 use sacp::component::Component;
 

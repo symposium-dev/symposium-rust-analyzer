@@ -32,7 +32,6 @@ The proxy exposes the following rust-analyzer tools:
 - `rust_analyzer_code_actions` - Get available code actions
 - `rust_analyzer_set_workspace` - Set workspace root
 - `rust_analyzer_diagnostics` - Get file diagnostics
-- `rust_analyzer_workspace_diagnostics` - Get workspace diagnostics
 - `rust_analyzer_failed_obligations` - Get failed trait obligations (rust-analyzer specific)
 - `rust_analyzer_failed_obligations_goal` - Explore nested goals (rust-analyzer specific)
 
