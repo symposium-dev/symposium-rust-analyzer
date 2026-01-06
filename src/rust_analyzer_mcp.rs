@@ -88,7 +88,7 @@ pub(crate) async fn ensure_bridge(bridge: &BridgeType, workspace_path: Option<&s
             .await
             .map_err(|e| anyhow!("Failed to start rust-analyzer: {}", e))?;
 
-        tracing::debug!(?client);
+        wait_for_start(&client).await;
 
         bridge_guard.client = Some(client);
         bridge_guard.opened_documents.clear();
@@ -123,6 +123,22 @@ where
     let mut bridge_guard = bridge.lock().await;
     let uri = ensure_document_open(&mut bridge_guard, file_path).await?;
     f(bridge_guard.client.as_ref().unwrap(), uri).await
+}
+
+async fn wait_for_start(lsp: &LspClient) {
+    let _ = lsp
+        .subscribe_notification::<(), _>(
+            "experimental/serverStatus".to_string(),
+            |value: serde_json::Value| {
+                Box::pin(async move {
+                    let Some(q) = value.get("quiescent").and_then(|q| q.as_bool()) else {
+                        return Err(anyhow::anyhow!("quiescent not found or invalid"));
+                    };
+                    if q { Ok(Some(())) } else { Ok(None) }
+                })
+            },
+        )
+        .await;
 }
 
 fn file_path_to_uri(file_path: &str) -> anyhow::Result<Uri> {

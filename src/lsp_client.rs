@@ -2,17 +2,22 @@ use anyhow::{Result, anyhow};
 use lsp_types::*;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::error;
 
-#[derive(Debug)]
+type NotifSubscription =
+    Box<dyn (Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = bool> + Send>>) + Send>;
+
 pub struct LspClient {
     child: Child,
     request_tx: mpsc::UnboundedSender<LspMessage>,
     next_id: std::sync::atomic::AtomicU64,
+    notification_subscriptions: Arc<Mutex<HashMap<String, Vec<NotifSubscription>>>>,
 }
 
 enum LspMessage {
@@ -59,7 +64,9 @@ impl LspClient {
                     if string.is_empty() {
                         break;
                     }
-                    eprint!("[rust-analyzer]: {}", string);
+                    if tracing::enabled!(tracing::Level::DEBUG) {
+                        eprint!("[rust-analyzer]: {}", string);
+                    }
                     string.clear();
                 }
             });
@@ -70,6 +77,7 @@ impl LspClient {
             u64,
             oneshot::Sender<Result<Value>>,
         >::new()));
+        let notification_subscriptions = Arc::new(Mutex::new(HashMap::new()));
 
         // Start I/O tasks
         tokio::spawn(Self::write_task(
@@ -77,12 +85,17 @@ impl LspClient {
             request_rx,
             pending_requests.clone(),
         ));
-        tokio::spawn(Self::read_task(stdout, pending_requests));
+        tokio::spawn(Self::read_task(
+            stdout,
+            pending_requests,
+            notification_subscriptions.clone(),
+        ));
 
         let client = Self {
             child,
             request_tx,
             next_id: std::sync::atomic::AtomicU64::new(1),
+            notification_subscriptions,
         };
 
         // Initialize
@@ -149,7 +162,8 @@ impl LspClient {
 
     async fn read_task(
         stdout: tokio::process::ChildStdout,
-        pending_requests: std::sync::Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value>>>>>,
+        pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value>>>>>,
+        notification_subscriptions: Arc<Mutex<HashMap<String, Vec<NotifSubscription>>>>,
     ) {
         let mut reader = BufReader::new(stdout);
         let mut buffer = String::new();
@@ -201,6 +215,16 @@ impl LspClient {
                         };
                         let _ = tx.send(result);
                     }
+                } else if let Some(method) = message.get("method").and_then(|v| v.as_str()) {
+                    let params = message.get("params").cloned().unwrap_or(Value::Null);
+                    let mut subs = notification_subscriptions.lock().await;
+                    let mut new_subs = Vec::with_capacity(subs.len());
+                    for sub in subs.remove(method).unwrap_or_default() {
+                        if !sub(params.clone()).await {
+                            new_subs.push(sub);
+                        }
+                    }
+                    subs.insert(method.to_string(), new_subs);
                 }
             }
         }
@@ -234,6 +258,53 @@ impl LspClient {
             }))?;
 
         Ok(())
+    }
+
+    /// Subscribe to a given notification, passing a callback that gets called for each notification from the server.
+    /// If the callback returns an `Err(e)`, then this function returns an `Err(e)`.
+    /// If the callback returns an `Ok(None)`, then this function does not return (yet).
+    /// If the callback returns an `Ok(Some(value))`, then this function returns `Ok(value)` and the notification is unsubscribed.
+    pub fn subscribe_notification<R: Send + 'static, F: Send + Sync + Clone + 'static>(
+        &self,
+        method: String,
+        callback: F,
+    ) -> impl Future<Output = Result<R>> + use<'_, R, F>
+    where
+        F: Fn(Value) -> Pin<Box<dyn Future<Output = Result<Option<R>>> + Send>>,
+    {
+        let (response_tx, response_rx) = oneshot::channel();
+        let response_tx = Arc::new(Mutex::new(Some(response_tx)));
+
+        let f = move |value: Value| -> Pin<Box<dyn Future<Output = bool> + Send>> {
+            let response_tx = response_tx.clone();
+            let callback = callback.clone();
+            Box::pin(async move {
+                let result = callback(value).await;
+                match result {
+                    Ok(None) => false,
+                    Ok(Some(v)) => {
+                        let _ = response_tx.lock().await.take().unwrap().send(Ok(v));
+                        true
+                    }
+                    Err(e) => {
+                        let _ = response_tx.lock().await.take().unwrap().send(Err(e));
+                        true
+                    }
+                }
+            })
+        };
+
+        async move {
+            let mut notifs_lock = self.notification_subscriptions.lock().await;
+            let notifs = notifs_lock
+                .entry(method.to_string())
+                .or_insert_with(Vec::new);
+            notifs.push(Box::new(f));
+            drop(notifs_lock);
+
+            let response = response_rx.await?;
+            response
+        }
     }
 
     #[allow(deprecated)]

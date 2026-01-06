@@ -66,23 +66,19 @@ async fn test_rust_analyzer_set_workspace() -> Result<()> {
 
 #[tokio::test]
 async fn test_rust_analyzer_hover() -> Result<()> {
-    tracing::debug!("Starting test_rust_analyzer_hover");
     let conductor = create_conductor().await;
     let file_path = get_test_file_path();
 
-    // Test hovering over the Person struct name
     let result = yopo::prompt(
         conductor,
         &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_hover with {{ "file_path": "{}", "line": 120, "character": 11 }}"#,
+            r#"Use tool rust-analyzer-mcp::rust_analyzer_hover with {{ "file_path": "{}", "line": 3, "character": 11 }}"#,
             file_path
         ),
     )
     .await?;
 
-    dbg!(&result);
-    assert!(result.contains("CallToolResult"));
-    assert!(false);
+    assert!(result.contains("name: String"));
     Ok(())
 }
 
@@ -91,7 +87,6 @@ async fn test_rust_analyzer_definition() -> Result<()> {
     let conductor = create_conductor().await;
     let file_path = get_test_file_path();
 
-    // Test going to definition of HashMap
     let result = yopo::prompt(
         conductor,
         &format!(
@@ -101,8 +96,7 @@ async fn test_rust_analyzer_definition() -> Result<()> {
     )
     .await?;
 
-    dbg!(&result);
-    assert!(result.contains("CallToolResult"));
+    assert!(result.contains("src/collections/hash/map.rs"));
     Ok(())
 }
 
@@ -121,8 +115,7 @@ async fn test_rust_analyzer_references() -> Result<()> {
     )
     .await?;
 
-    dbg!(&result);
-    assert!(result.contains("CallToolResult"));
+    assert!(result.contains("test-project/src/main.rs"));
     Ok(())
 }
 
@@ -131,18 +124,16 @@ async fn test_rust_analyzer_completion() -> Result<()> {
     let conductor = create_conductor().await;
     let file_path = get_test_file_path();
 
-    // Test completion after "user." in main function
     let result = yopo::prompt(
         conductor,
         &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_completion with {{ "file_path": "{}", "line": 85, "character": 30 }}"#,
+            r#"Use tool rust-analyzer-mcp::rust_analyzer_completion with {{ "file_path": "{}", "line": 99, "character": 29 }}"#,
             file_path
         ),
     )
     .await?;
 
-    dbg!(&result);
-    assert!(result.contains("CallToolResult"));
+    assert!(result.contains("greet"));
     Ok(())
 }
 
@@ -160,9 +151,7 @@ async fn test_rust_analyzer_symbols() -> Result<()> {
     )
     .await?;
 
-    dbg!(&result);
-    assert!(result.contains("CallToolResult"));
-    assert!(false);
+    assert!(result.contains("Person"));
     Ok(())
 }
 
@@ -180,8 +169,7 @@ async fn test_rust_analyzer_format() -> Result<()> {
     )
     .await?;
 
-    dbg!(&result);
-    assert!(result.contains("CallToolResult"));
+    assert!(result.contains("is_error: Some(false)"));
     Ok(())
 }
 
@@ -190,7 +178,6 @@ async fn test_rust_analyzer_code_actions() -> Result<()> {
     let conductor = create_conductor().await;
     let file_path = get_test_file_path();
 
-    // Test code actions on the error_function() call
     let result = yopo::prompt(
         conductor,
         &format!(
@@ -200,8 +187,7 @@ async fn test_rust_analyzer_code_actions() -> Result<()> {
     )
     .await?;
 
-    dbg!(&result);
-    assert!(result.contains("CallToolResult"));
+    assert!(result.contains("structured_content"));
     Ok(())
 }
 
@@ -219,9 +205,7 @@ async fn test_rust_analyzer_diagnostics() -> Result<()> {
     )
     .await?;
 
-    dbg!(&result);
-    assert!(result.contains("CallToolResult"));
-    // Should contain diagnostics about the undefined error_function
+    assert!(result.contains("structured_content"));
     Ok(())
 }
 
@@ -230,18 +214,16 @@ async fn test_rust_analyzer_failed_obligations() -> Result<()> {
     let conductor = create_conductor().await;
     let file_path = get_test_file_path();
 
-    // Test failed obligations on the error_function call
     let result = yopo::prompt(
         conductor,
         &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_failed_obligations with {{ "file_path": "{}", "line": 104, "character": 4 }}"#,
+            r#"Use tool rust-analyzer-mcp::rust_analyzer_failed_obligations with {{ "file_path": "{}", "line": 45, "character": 5 }}"#,
             file_path
         ),
     )
     .await?;
 
-    dbg!(&result);
-    assert!(result.contains("CallToolResult"));
+    assert!(result.contains("goal_index"));
     Ok(())
 }
 
@@ -268,13 +250,11 @@ async fn test_direct_bridge_hover() -> Result<()> {
                 .hover(uri, position)
                 .await
                 .map_err(|e| anyhow::anyhow!("Hover request failed: {}", e))?;
-            dbg!(&hover_result);
             Ok(serde_json::to_string(&hover_result)?)
         },
     )
     .await?;
 
-    dbg!(&result);
-    assert!(!result.is_empty());
+    assert!(result.contains("contents"));
     Ok(())
 }
