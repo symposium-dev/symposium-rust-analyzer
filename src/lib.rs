@@ -1,4 +1,5 @@
 mod failed_obligations;
+mod lsp_client;
 mod rust_analyzer_mcp;
 
 use anyhow::Result;

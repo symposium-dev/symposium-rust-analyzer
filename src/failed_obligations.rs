@@ -1,19 +1,11 @@
 use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
-use lsp_bridge::LspBridge;
-use lsp_types::{TextDocumentPositionParams, request::Request};
+use lsp_types::TextDocumentPositionParams;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::rust_analyzer_mcp::{GoalIndexInputs, SERVER_ID};
-
-struct FailedObligationsRequest;
-impl Request for FailedObligationsRequest {
-    type Params = lsp_types::TextDocumentPositionParams;
-    type Result = serde_json::Value;
-    const METHOD: &'static str = "rust-analyzer/getFailedObligations";
-}
+use crate::{lsp_client::LspClient, rust_analyzer_mcp::GoalIndexInputs};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProofTreeData {
@@ -116,12 +108,15 @@ impl FailedObligationsState {
 }
 
 pub async fn handle_failed_obligations(
-    lsp: &LspBridge,
+    client: &LspClient,
     state: &mut FailedObligationsState,
     args: TextDocumentPositionParams,
 ) -> Result<Vec<GoalTree>> {
-    let result = lsp
-        .request::<FailedObligationsRequest>(SERVER_ID, args)
+    let result = client
+        .request(
+            "rust-analyzer/getFailedObligations",
+            serde_json::to_value(args)?,
+        )
         .await?;
     let result = result.as_str().ok_or_else(|| anyhow!("Expected String"))?;
     if result.is_empty() {
@@ -136,7 +131,7 @@ pub async fn handle_failed_obligations(
 }
 
 pub async fn handle_failed_obligations_goal(
-    _lsp: &LspBridge,
+    _lsp: &LspClient,
     state: &mut FailedObligationsState,
     args: GoalIndexInputs,
 ) -> Result<serde_json::Value> {

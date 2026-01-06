@@ -11,12 +11,12 @@ This project creates an ACP proxy using symposium-sacp that connects to rust-ana
 ## Architecture
 
 ```
-ACP Agent <-> ACP Proxy <-> MCP Server <-> LSP Bridge <-> rust-analyzer LSP
+ACP Agent <-> ACP Proxy <-> MCP Server <-> LSP Client <-> rust-analyzer LSP
 ```
 
 - **ACP Proxy**: The main proxy component that implements the ACP protocol
 - **MCP Server**: Exposes rust-analyzer functionality as MCP tools
-- **LSP Bridge**: Manages communication with the rust-analyzer LSP server
+- **LSP Client**: Minimal LSP client implementation using `lsp-types`
 - **rust-analyzer**: The actual Rust language server
 
 ## Available Tools
@@ -39,3 +39,6 @@ The proxy exposes the following rust-analyzer tools:
 
 - rust-analyzer must be installed and available in PATH
 
+## Implementation Notes
+
+This project uses a custom minimal LSP client implementation built with `lsp-types`.

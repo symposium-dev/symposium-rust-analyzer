@@ -249,7 +249,7 @@ async fn test_rust_analyzer_failed_obligations() -> Result<()> {
 async fn test_direct_bridge_hover() -> Result<()> {
     use lsp_types::Position;
     use std::sync::Arc;
-    use symposium_rust_analyzer::{BridgeState, BridgeType, SERVER_ID, with_bridge_and_document};
+    use symposium_rust_analyzer::{BridgeState, BridgeType, with_bridge_and_document};
     use tokio::sync::Mutex;
 
     init_tracing();
@@ -263,10 +263,9 @@ async fn test_direct_bridge_hover() -> Result<()> {
         Some(&test_project.display().to_string()),
         &file_path,
         async move |lsp, uri| {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             let position = Position::new(3, 11); // Person struct
             let hover_result = lsp
-                .get_hover(SERVER_ID, &uri, position)
+                .hover(uri, position)
                 .await
                 .map_err(|e| anyhow::anyhow!("Hover request failed: {}", e))?;
             dbg!(&hover_result);

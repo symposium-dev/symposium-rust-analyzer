@@ -1,5 +1,4 @@
 use anyhow::anyhow;
-use lsp_bridge::{LspBridge, LspClientCapabilities, LspError, LspServerConfig};
 use lsp_types::{
     CodeActionContext, Position, Range, TextDocumentIdentifier, TextDocumentPositionParams, Uri,
 };
@@ -16,43 +15,12 @@ use tokio::sync::Mutex;
 use crate::failed_obligations::{
     FailedObligationsState, handle_failed_obligations, handle_failed_obligations_goal,
 };
+use crate::lsp_client::LspClient;
 
 pub type Result<T> = std::result::Result<T, sacp::Error>;
 
-struct SafeLspBridge(Option<LspBridge>);
-
-impl SafeLspBridge {
-    fn new(bridge: LspBridge) -> Self {
-        Self(Some(bridge))
-    }
-}
-
-impl std::ops::Deref for SafeLspBridge {
-    type Target = LspBridge;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref().unwrap()
-    }
-}
-
-impl std::ops::DerefMut for SafeLspBridge {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.as_mut().unwrap()
-    }
-}
-
-impl Drop for SafeLspBridge {
-    fn drop(&mut self) {
-        // The Drop impl of LspBridge uses futures's block_on, but this doesn't work with the tokio runtime.
-        // So, given that this should only be dropped at the end of the program, just mem forget.
-        // I hate this, btw. It means that we need an `Option` and the `unwrap`s.
-        if let Some(bridge) = self.0.take() {
-            std::mem::forget(bridge);
-        }
-    }
-}
-
 pub struct BridgeState {
-    bridge: Option<SafeLspBridge>,
+    client: Option<LspClient>,
     opened_documents: HashSet<String>,
     document_versions: HashMap<String, i32>,
 }
@@ -60,7 +28,7 @@ pub struct BridgeState {
 impl BridgeState {
     pub fn new() -> Self {
         Self {
-            bridge: None,
+            client: None,
             opened_documents: HashSet::new(),
             document_versions: HashMap::new(),
         }
@@ -70,7 +38,7 @@ impl BridgeState {
 pub type BridgeType = Arc<Mutex<BridgeState>>;
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
-struct FilePositionInputs {
+pub struct FilePositionInputs {
     pub file_path: String,
     pub line: u32,
     pub character: u32,
@@ -102,87 +70,27 @@ pub struct GoalIndexInputs {
 
 pub const SERVER_ID: &str = "rust-analyzer";
 
-fn initialization_options() -> Value {
-    serde_json::json!({
-        "cargo": {
-            "buildScripts": {
-                "enable": true
-            }
-        },
-        "checkOnSave": {
-            "enable": true,
-            "command": "check",
-            "allTargets": true
-        },
-        "diagnostics": {
-            "enable": true,
-            "experimental": {
-                "enable": false
-            }
-        },
-        "procMacro": {
-            "enable": true
-        }
-    })
-}
-
-fn capabilities() -> LspClientCapabilities {
-    let capabilities = LspClientCapabilities {
-        text_document: lsp_bridge::config::TextDocumentClientCapabilities {
-            hover: Some(lsp_bridge::config::HoverClientCapabilities),
-            completion: Some(lsp_bridge::config::CompletionClientCapabilities),
-            definition: Some(lsp_bridge::config::GotoCapability),
-            ..Default::default()
-        },
-        workspace: lsp_bridge::config::WorkspaceClientCapabilities {
-            did_change_configuration: None,
-            ..Default::default()
-        },
-        window: lsp_bridge::config::WindowClientCapabilities {
-            work_done_progress: Some(true),
-            ..Default::default()
-        },
-        experimental: Some(serde_json::json!({
-            "serverStatusNotification": true,
-        })),
-        ..Default::default()
-    };
-
-    capabilities
-}
-
 pub(crate) async fn ensure_bridge(bridge: &BridgeType, workspace_path: Option<&str>) -> Result<()> {
     let mut bridge_guard = bridge.lock().await;
-    if bridge_guard.bridge.is_none() || workspace_path.is_some() {
+    if bridge_guard.client.is_none() || workspace_path.is_some() {
         let workspace = workspace_path
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
         tracing::debug!(?workspace);
 
-        let mut lsp_bridge = LspBridge::new();
-        let config = LspServerConfig::new()
-            .command("rust-analyzer")
-            .trace(lsp_bridge::config::TraceLevel::Verbose)
-            .env("RA_LOG", "base_db,rust_analyzer")
-            .client_capabilities(capabilities())
-            .initialization_options(initialization_options())
-            .root_path(workspace.clone())
-            .workspace_folder(workspace);
+        let root_uri = Uri::from_str(&format!("file://{}", workspace.display()))
+            .map_err(|e| anyhow!("Invalid workspace path: {}", e))?;
 
-        lsp_bridge
-            .register_server(SERVER_ID, config)
+        tracing::debug!(?root_uri);
+
+        let client = LspClient::new("rust-analyzer", &[], root_uri)
             .await
-            .map_err(|e| anyhow!("Failed to register server: {}", e))?;
-        lsp_bridge
-            .start_server(SERVER_ID)
-            .await
-            .map_err(|e| anyhow!("Failed to start server: {}", e))?;
-        lsp_bridge
-            .wait_server_ready(SERVER_ID)
-            .await
-            .map_err(|e| anyhow!("Server failed to become ready: {}", e))?;
-        bridge_guard.bridge = Some(SafeLspBridge::new(lsp_bridge));
+            .map_err(|e| anyhow!("Failed to start rust-analyzer: {}", e))?;
+
+        tracing::debug!(?client);
+
+        bridge_guard.client = Some(client);
         bridge_guard.opened_documents.clear();
         bridge_guard.document_versions.clear();
     }
@@ -195,11 +103,11 @@ pub(crate) async fn with_bridge<F, R>(
     f: F,
 ) -> Result<R>
 where
-    F: AsyncFnOnce(&LspBridge) -> Result<R>,
+    F: for<'a> AsyncFnOnce(&'a LspClient) -> Result<R>,
 {
     ensure_bridge(bridge, workspace_path).await?;
     let bridge_guard = bridge.lock().await;
-    f(bridge_guard.bridge.as_ref().unwrap()).await
+    f(bridge_guard.client.as_ref().unwrap()).await
 }
 
 pub async fn with_bridge_and_document<F, R>(
@@ -209,35 +117,42 @@ pub async fn with_bridge_and_document<F, R>(
     f: F,
 ) -> Result<R>
 where
-    F: AsyncFnOnce(&LspBridge, String) -> Result<R>,
+    F: for<'a> AsyncFnOnce(&'a LspClient, Uri) -> Result<R>,
 {
     ensure_bridge(bridge, workspace_path).await?;
     let mut bridge_guard = bridge.lock().await;
     let uri = ensure_document_open(&mut bridge_guard, file_path).await?;
-    f(bridge_guard.bridge.as_ref().unwrap(), uri).await
+    f(bridge_guard.client.as_ref().unwrap(), uri).await
 }
 
-fn file_path_to_uri(file_path: &str) -> String {
+fn file_path_to_uri(file_path: &str) -> anyhow::Result<Uri> {
     if file_path.starts_with("file://") {
-        file_path.to_string()
+        Uri::from_str(file_path).map_err(|e| anyhow!("Invalid URI: {}", e))
     } else {
-        format!("file://{}", file_path)
+        Uri::from_str(&format!("file://{}", file_path))
+            .map_err(|e| anyhow!("Invalid file path: {}", e))
     }
 }
 
-async fn ensure_document_open(bridge_state: &mut BridgeState, file_path: &str) -> Result<String> {
-    let uri = file_path_to_uri(file_path);
+async fn ensure_document_open(bridge_state: &mut BridgeState, file_path: &str) -> Result<Uri> {
+    let uri = file_path_to_uri(file_path)?;
+    let uri_str = uri.to_string();
 
     // Only open if not already opened
-    if !bridge_state.opened_documents.contains(&uri) {
+    if !bridge_state.opened_documents.contains(&uri_str) {
         if let Ok(content) = std::fs::read_to_string(file_path) {
-            if let Some(bridge) = &bridge_state.bridge {
-                bridge
-                    .open_document(SERVER_ID, &uri, &content)
+            if let Some(client) = &bridge_state.client {
+                let version = bridge_state
+                    .document_versions
+                    .get(&uri_str)
+                    .copied()
+                    .unwrap_or(1);
+                client
+                    .did_open(uri.clone(), "rust".to_string(), version, content)
                     .await
                     .map_err(|e| anyhow!("Failed to open document: {}", e))?;
-                bridge_state.opened_documents.insert(uri.clone());
-                bridge_state.document_versions.insert(uri.clone(), 1);
+                bridge_state.opened_documents.insert(uri_str.clone());
+                bridge_state.document_versions.insert(uri_str, version);
             }
         }
     }
@@ -249,7 +164,7 @@ pub async fn build_server(
     workspace_path: Option<String>,
 ) -> Result<McpServer<ProxyToConductor, impl sacp::JrResponder<ProxyToConductor>>> {
     let bridge: BridgeType = Arc::new(Mutex::new(BridgeState::new()));
-    with_bridge(&bridge, workspace_path.as_deref(), async |_lsp| Ok(())).await?;
+    with_bridge(&bridge, workspace_path.as_deref(), async |_client| Ok(())).await?;
 
     let failed_obligations_state = Arc::new(Mutex::new(FailedObligationsState::new()));
     let server = McpServer::builder("rust-analyzer-mcp".to_string())
@@ -262,13 +177,20 @@ pub async fn build_server(
             {
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
-                    with_bridge_and_document(&bridge, None, &input.file_path, async move |lsp, uri| {
-                        let position = Position::new(input.line, input.character);
-                        let result = lsp.get_hover(SERVER_ID, &uri, position).await
-                            .map_err(|e| anyhow!("Hover request failed: {}", e))?;
-                        dbg!(&result);
-                        Ok(serde_json::to_string(&result)?)
-                    }).await
+                    with_bridge_and_document(
+                        &bridge,
+                        None,
+                        &input.file_path,
+                        async move |client, uri| {
+                            let position = Position::new(input.line, input.character);
+                            let result = client
+                                .hover(uri, position)
+                                .await
+                                .map_err(|e| anyhow!("Hover request failed: {}", e))?;
+                            Ok(serde_json::to_string(&result)?)
+                        },
+                    )
+                    .await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -279,12 +201,20 @@ pub async fn build_server(
             {
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
-                    with_bridge_and_document(&bridge, None, &input.file_path, async move |lsp, uri| {
-                        let position = Position::new(input.line, input.character);
-                        let result = lsp.go_to_definition(SERVER_ID, &uri, position).await
-                            .map_err(|e| anyhow!("Definition request failed: {}", e))?;
-                        Ok(serde_json::to_string(&result)?)
-                    }).await
+                    with_bridge_and_document(
+                        &bridge,
+                        None,
+                        &input.file_path,
+                        async move |client, uri| {
+                            let position = Position::new(input.line, input.character);
+                            let result = client
+                                .goto_definition(uri, position)
+                                .await
+                                .map_err(|e| anyhow!("Definition request failed: {}", e))?;
+                            Ok(serde_json::to_string(&result)?)
+                        },
+                    )
+                    .await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -295,58 +225,90 @@ pub async fn build_server(
             {
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
-                    with_bridge_and_document(&bridge, None, &input.file_path, async move |lsp, uri| {
-                        let position = Position::new(input.line, input.character);
-                        let result = lsp.find_references(SERVER_ID, &uri, position).await
-                            .map_err(|e| anyhow!("References request failed: {}", e))?;
-                        Ok(serde_json::to_string(&result)?)
-                    }).await
+                    with_bridge_and_document(
+                        &bridge,
+                        None,
+                        &input.file_path,
+                        async move |client, uri| {
+                            let position = Position::new(input.line, input.character);
+                            let result = client
+                                .find_references(uri, position, true)
+                                .await
+                                .map_err(|e| anyhow!("References request failed: {}", e))?;
+                            Ok(serde_json::to_string(&result)?)
+                        },
+                    )
+                    .await
                 }
             },
             sacp::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_completion",
-            "Get code completion suggestions at a specific position",
+            "Get code completions at a specific position",
             {
                 let bridge = bridge.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
-                    with_bridge_and_document(&bridge, None, &input.file_path, async move |lsp, uri| {
-                        let position = Position::new(input.line, input.character);
-                        let result = lsp.get_completions(SERVER_ID, &uri, position).await
-                            .map_err(|e| anyhow!("Completion request failed: {}", e))?;
-                        Ok(serde_json::to_string(&result)?)
-                    }).await
+                    with_bridge_and_document(
+                        &bridge,
+                        None,
+                        &input.file_path,
+                        async move |client, uri| {
+                            let position = Position::new(input.line, input.character);
+                            let result = client
+                                .completion(uri, position)
+                                .await
+                                .map_err(|e| anyhow!("Completion request failed: {}", e))?;
+                            Ok(serde_json::to_string(&result)?)
+                        },
+                    )
+                    .await
                 }
             },
             sacp::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_symbols",
-            "Get document symbols (functions, structs, etc.) for a Rust file",
+            "Get document symbols for a Rust file",
             {
                 let bridge = bridge.clone();
                 async move |input: FileOnlyInputs, _mcp_cx| {
-                    with_bridge_and_document(&bridge, None, &input.file_path, async move |lsp, uri| {
-                        let result = lsp.get_document_symbols(SERVER_ID, &uri).await
-                            .map_err(|e| anyhow!("Document symbols request failed: {}", e))?;
-                        Ok(serde_json::to_string(&result)?)
-                    }).await
+                    with_bridge_and_document(
+                        &bridge,
+                        None,
+                        &input.file_path,
+                        async move |client, uri| {
+                            let result = client
+                                .document_symbols(uri)
+                                .await
+                                .map_err(|e| anyhow!("Document symbols request failed: {}", e))?;
+                            Ok(serde_json::to_string(&result)?)
+                        },
+                    )
+                    .await
                 }
             },
             sacp::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_format",
-            "Format a Rust file using rust-analyzer",
+            "Format a Rust document",
             {
                 let bridge = bridge.clone();
                 async move |input: FileOnlyInputs, _mcp_cx| {
-                    let mut bridge_guard = bridge.lock().await;
-                    let uri = ensure_document_open(&mut bridge_guard, &input.file_path).await?;
-                    let result = bridge_guard.bridge.as_ref().unwrap().format_document(SERVER_ID, &uri).await
-                        .map_err(|e| anyhow!("Format request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge_and_document(
+                        &bridge,
+                        None,
+                        &input.file_path,
+                        async move |client, uri| {
+                            let result = client
+                                .format_document(uri)
+                                .await
+                                .map_err(|e| anyhow!("Format request failed: {}", e))?;
+                            Ok(serde_json::to_string(&result)?)
+                        },
+                    )
+                    .await
                 }
             },
             sacp::tool_fn_mut!(),
@@ -357,68 +319,79 @@ pub async fn build_server(
             {
                 let bridge = bridge.clone();
                 async move |input: RangeInputs, _mcp_cx| {
-                    let mut bridge_guard = bridge.lock().await;
-                    let uri = ensure_document_open(&mut bridge_guard, &input.file_path).await?;
-                    let range = Range::new(
-                        Position::new(input.line, input.character),
-                        Position::new(input.end_line, input.end_character)
-                    );
-                    let context = CodeActionContext {
-                        diagnostics: vec![],
-                        only: None,
-                        trigger_kind: None,
-                    };
-                    let result = bridge_guard.bridge.as_ref().unwrap().get_code_actions(SERVER_ID, &uri, range, context).await
-                        .map_err(|e| anyhow!("Code actions request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge_and_document(
+                        &bridge,
+                        None,
+                        &input.file_path,
+                        async move |client, uri| {
+                            let range = Range::new(
+                                Position::new(input.line, input.character),
+                                Position::new(input.end_line, input.end_character),
+                            );
+                            let context = CodeActionContext {
+                                diagnostics: vec![],
+                                only: None,
+                                trigger_kind: None,
+                            };
+                            let result = client
+                                .code_actions(uri, range, context)
+                                .await
+                                .map_err(|e| anyhow!("Code actions request failed: {}", e))?;
+                            Ok(serde_json::to_string(&result)?)
+                        },
+                    )
+                    .await
                 }
             },
             sacp::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_set_workspace",
-            "Set the workspace root directory for rust-analyzer",
+            "Set the workspace root for rust-analyzer",
             {
                 let bridge = bridge.clone();
                 async move |input: WorkspaceInputs, _mcp_cx| {
-                    with_bridge(&bridge, Some(&input.workspace_path), async move |_lsp| {
+                    with_bridge(&bridge, Some(&input.workspace_path), async move |_client| {
                         Ok("Workspace set successfully".to_string())
-                    }).await
+                    })
+                    .await
                 }
             },
             sacp::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_diagnostics",
-            "Get compiler diagnostics (errors, warnings, hints) for a Rust file",
+            "Get diagnostics for a Rust file",
             {
                 let bridge = bridge.clone();
                 async move |input: FileOnlyInputs, _mcp_cx| {
-                    let mut bridge_guard = bridge.lock().await;
-                    let uri = ensure_document_open(&mut bridge_guard, &input.file_path).await?;
-
-                    // Wait a bit for rust-analyzer to process
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-                    let result = bridge_guard.bridge.as_ref().unwrap().get_diagnostics(SERVER_ID, &uri)
-                        .map_err(|e| anyhow!("Diagnostics request failed: {}", e))?;
-                    Ok(serde_json::to_string(&result)?)
+                    with_bridge_and_document(
+                        &bridge,
+                        None,
+                        &input.file_path,
+                        async move |client, uri| {
+                            let result = client
+                                .diagnostics(uri)
+                                .await
+                                .map_err(|e| anyhow!("Diagnostics request failed: {}", e))?;
+                            Ok(serde_json::to_string(&result)?)
+                        },
+                    )
+                    .await
                 }
             },
             sacp::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_failed_obligations",
-            "Get failed trait obligations at a position. Returns a goal_index when nested goals exist.",
+            "Get failed trait obligations for debugging (rust-analyzer specific)",
             {
                 let bridge = bridge.clone();
                 let state = failed_obligations_state.clone();
                 async move |input: FilePositionInputs, _mcp_cx| {
                     let mut bridge_guard = bridge.lock().await;
                     let uri = ensure_document_open(&mut bridge_guard, &input.file_path).await?;
-                    let doc = TextDocumentIdentifier {
-                        uri: Uri::from_str(&uri).map_err(|_| LspError::invalid_uri(uri)).map_err(|e| anyhow::Error::new(e))?,
-                    };
+                    let doc = TextDocumentIdentifier { uri };
                     let position = Position::new(input.line, input.character);
 
                     let args = TextDocumentPositionParams {
@@ -429,7 +402,12 @@ pub async fn build_server(
                     let mut state = state.lock().await;
                     use std::ops::DerefMut;
                     let state = state.deref_mut();
-                    let result = handle_failed_obligations(bridge_guard.bridge.as_ref().unwrap(), state, args).await?;
+                    let result = handle_failed_obligations(
+                        bridge_guard.client.as_ref().unwrap(),
+                        state,
+                        args,
+                    )
+                    .await?;
 
                     Ok(serde_json::to_string(&result).map_err(|e| anyhow::Error::new(e))?)
                 }
@@ -438,7 +416,7 @@ pub async fn build_server(
         )
         .tool_fn_mut(
             "rust_analyzer_failed_obligations_goal",
-            "Explore a specific nested_goal (or list of nested_goals) and its candidates.",
+            "Explore nested goals in failed trait obligations (rust-analyzer specific)",
             {
                 let bridge = bridge.clone();
                 let state = failed_obligations_state.clone();
@@ -447,7 +425,12 @@ pub async fn build_server(
                     let mut state = state.lock().await;
                     use std::ops::DerefMut;
                     let state = state.deref_mut();
-                    let result = handle_failed_obligations_goal(bridge_guard.bridge.as_ref().unwrap(), state, input).await?;
+                    let result = handle_failed_obligations_goal(
+                        bridge_guard.client.as_ref().unwrap(),
+                        state,
+                        input,
+                    )
+                    .await?;
 
                     Ok(serde_json::to_string(&result).map_err(|e| anyhow::Error::new(e))?)
                 }
