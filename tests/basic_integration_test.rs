@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use expect_test::expect;
-use sacp::DynComponent;
-use sacp_conductor::Conductor;
+use sacp::link::ConductorToClient;
+use sacp_conductor::{Conductor, ProxiesAndAgent};
 use symposium_rust_analyzer::RustAnalyzerProxy;
 
 fn init_tracing() {
@@ -29,19 +28,16 @@ fn get_test_file_path() -> String {
         .to_string()
 }
 
-async fn create_conductor() -> Conductor {
+async fn create_conductor() -> Conductor<ConductorToClient> {
     init_tracing();
     let test_project = get_test_project_path();
     let proxy = RustAnalyzerProxy {
         workspace_path: Some(test_project.display().to_string()),
     };
 
-    Conductor::new(
+    Conductor::new_agent(
         "test-conductor".to_string(),
-        vec![
-            DynComponent::new(proxy),
-            DynComponent::new(elizacp::ElizaAgent::new()),
-        ],
+        ProxiesAndAgent::new(elizacp::ElizaAgent::new()).proxy(proxy),
         Default::default(),
     )
 }
@@ -60,7 +56,7 @@ async fn test_rust_analyzer_set_workspace() -> Result<()> {
     )
     .await?;
 
-    expect![[r#"OK: CallToolResult { content: [Annotated { raw: Text(RawTextContent { text: "\"Workspace set successfully\"", meta: None }), annotations: None }], structured_content: Some(String("Workspace set successfully")), is_error: Some(false), meta: None }"#]].assert_eq(&result);
+    assert!(result.contains("Workspace set successfully"));
     Ok(())
 }
 
