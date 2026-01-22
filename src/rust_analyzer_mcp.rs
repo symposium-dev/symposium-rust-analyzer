@@ -47,6 +47,7 @@ struct FileOnlyInputs {
     pub file_path: String,
 }
 
+/*
 #[derive(Serialize, Deserialize, JsonSchema)]
 struct RangeInputs {
     pub file_path: String,
@@ -55,6 +56,7 @@ struct RangeInputs {
     pub end_line: u32,
     pub end_character: u32,
 }
+*/
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 struct WorkspaceInputs {

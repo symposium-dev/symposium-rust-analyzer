@@ -1,0 +1,14 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    uses: symposium-dev/package-agent-extension/.github/workflows/build.yml@v1
+    with:
+      musl: true  # Use musl for static Linux binaries
+    secrets: inherit
