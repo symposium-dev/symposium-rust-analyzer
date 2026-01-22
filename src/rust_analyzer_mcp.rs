@@ -1,13 +1,11 @@
 use anyhow::anyhow;
-use lsp_types::{
-    CodeActionContext, Position, Range, TextDocumentIdentifier, TextDocumentPositionParams, Uri,
-};
+use lsp_types::{Position, TextDocumentIdentifier, TextDocumentPositionParams, Uri};
 use sacp::{ProxyToConductor, mcp_server::McpServer};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -151,6 +149,12 @@ fn file_path_to_uri(file_path: &str) -> anyhow::Result<Uri> {
 }
 
 async fn ensure_document_open(bridge_state: &mut BridgeState, file_path: &str) -> Result<Uri> {
+    let file_path = Path::new(file_path);
+    let file_path =
+        std::fs::canonicalize(file_path).map_err(|e| anyhow!("Invalid file path: {}", e))?;
+    let file_path = file_path
+        .to_str()
+        .ok_or_else(|| anyhow!("Invalid file path"))?;
     let uri = file_path_to_uri(file_path)?;
     let uri_str = uri.to_string();
 
@@ -306,6 +310,7 @@ pub async fn build_server(
             },
             sacp::tool_fn_mut!(),
         )
+        /*
         .tool_fn_mut(
             "rust_analyzer_format",
             "Format a Rust document",
@@ -361,6 +366,7 @@ pub async fn build_server(
             },
             sacp::tool_fn_mut!(),
         )
+        */
         .tool_fn_mut(
             "rust_analyzer_set_workspace",
             "Set the workspace root for rust-analyzer",
@@ -375,6 +381,7 @@ pub async fn build_server(
             },
             sacp::tool_fn_mut!(),
         )
+        /*
         .tool_fn_mut(
             "rust_analyzer_diagnostics",
             "Get diagnostics for a Rust file",
@@ -398,6 +405,7 @@ pub async fn build_server(
             },
             sacp::tool_fn_mut!(),
         )
+        */
         .tool_fn_mut(
             "rust_analyzer_failed_obligations",
             "Get failed trait obligations for debugging (rust-analyzer specific)",
