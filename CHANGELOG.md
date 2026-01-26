@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/symposium-dev/symposium-rust-analyzer/compare/v0.1.0...v0.1.1) - 2026-01-26
+
+### Other
+
+- Add an arbitrary LSP method call tool and comment out tests for removed tools
+- release v0.1.0
+
 ## [0.1.0](https://github.com/symposium-dev/symposium-rust-analyzer/releases/tag/v0.1.0) - 2026-01-22
 
 ### Other
