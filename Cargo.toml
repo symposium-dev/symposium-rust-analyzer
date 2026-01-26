@@ -1,6 +1,6 @@
 [package]
 name = "symposium-rust-analyzer"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT or Apache-2.0"
 description = "Symposium rust-analyzer proxy - an MCP server connecting to rust-analyzer and a ACP Proxy managing it"
