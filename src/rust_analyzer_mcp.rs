@@ -68,6 +68,17 @@ pub struct GoalIndexInputs {
     pub goal_index: Value,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct LspCallInputs {
+    pub method: String,
+    /// Optional params to pass to the LSP method. If omitted, `null` is sent.
+    pub params: Option<Value>,
+    /// If provided, sets the workspace root before making the call.
+    pub workspace_path: Option<String>,
+    /// If true, send as a notification (no response expected). Defaults to false.
+    pub is_notification: Option<bool>,
+}
+
 pub const SERVER_ID: &str = "rust-analyzer";
 
 pub(crate) async fn ensure_bridge(bridge: &BridgeType, workspace_path: Option<&str>) -> Result<()> {
@@ -459,6 +470,37 @@ pub async fn build_server(
                     .await?;
 
                     Ok(serde_json::to_string(&result).map_err(|e| anyhow::Error::new(e))?)
+                }
+            },
+            sacp::tool_fn_mut!(),
+        )
+        .tool_fn_mut(
+            "rust_analyzer_lsp_call",
+            "Make an arbitrary LSP method call",
+            {
+                let bridge = bridge.clone();
+                async move |input: LspCallInputs, _mcp_cx| {
+                    let method = input.method.clone();
+                    let params = input.params;
+                    let is_notification = input.is_notification.unwrap_or(false);
+
+                    with_bridge(&bridge, input.workspace_path.as_deref(), async move |client| {
+                        if is_notification {
+                            client
+                                .notify(&method, params)
+                                .await
+                                .map_err(|e| anyhow!("LSP notify failed: {}", e))?;
+                            Ok("Notification sent".to_string())
+                        } else {
+                            let params = params.unwrap_or(Value::Null);
+                            let result = client
+                                .request(&method, params)
+                                .await
+                                .map_err(|e| anyhow!("LSP request failed: {}", e))?;
+                            Ok(serde_json::to_string(&result).map_err(|e| anyhow::Error::new(e))?)
+                        }
+                    })
+                    .await
                 }
             },
             sacp::tool_fn_mut!(),
