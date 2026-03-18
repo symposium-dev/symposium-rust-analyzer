@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use sacp::link::ConductorToClient;
-use sacp_conductor::{Conductor, ProxiesAndAgent};
+use sacp::Agent;
+use sacp_conductor::{ConductorImpl, ProxiesAndAgent};
 use symposium_rust_analyzer::RustAnalyzerProxy;
 
 fn init_tracing() {
@@ -28,16 +28,16 @@ fn get_test_file_path() -> String {
         .to_string()
 }
 
-async fn create_conductor() -> Conductor<ConductorToClient> {
+async fn create_conductor() -> ConductorImpl<Agent> {
     init_tracing();
     let test_project = get_test_project_path();
     let proxy = RustAnalyzerProxy {
         workspace_path: Some(test_project.display().to_string()),
     };
 
-    Conductor::new_agent(
+    ConductorImpl::new_agent(
         "test-conductor".to_string(),
-        ProxiesAndAgent::new(elizacp::ElizaAgent::new()).proxy(proxy),
+        ProxiesAndAgent::new(elizacp::ElizaAgent::new(true)).proxy(proxy),
         Default::default(),
     )
 }
