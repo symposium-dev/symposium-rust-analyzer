@@ -1,6 +1,7 @@
 use anyhow::anyhow;
 use lsp_types::{Position, TextDocumentIdentifier, TextDocumentPositionParams, Uri};
-use sacp::{ProxyToConductor, mcp_server::McpServer};
+use sacp::mcp_server::McpServer;
+use sacp::{Role, RunWithConnectionTo};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -193,9 +194,9 @@ async fn ensure_document_open(bridge_state: &mut BridgeState, file_path: &str) -
     Ok(uri)
 }
 
-pub async fn build_server(
+pub async fn build_server<Counterpart: Role>(
     workspace_path: Option<String>,
-) -> Result<McpServer<ProxyToConductor, impl sacp::JrResponder<ProxyToConductor>>> {
+) -> Result<McpServer<Counterpart, impl RunWithConnectionTo<Counterpart>>> {
     let bridge: BridgeType = Arc::new(Mutex::new(BridgeState::new()));
     with_bridge(&bridge, workspace_path.as_deref(), async |_client| Ok(())).await?;
 
@@ -484,22 +485,27 @@ pub async fn build_server(
                     let params = input.params;
                     let is_notification = input.is_notification.unwrap_or(false);
 
-                    with_bridge(&bridge, input.workspace_path.as_deref(), async move |client| {
-                        if is_notification {
-                            client
-                                .notify(&method, params)
-                                .await
-                                .map_err(|e| anyhow!("LSP notify failed: {}", e))?;
-                            Ok("Notification sent".to_string())
-                        } else {
-                            let params = params.unwrap_or(Value::Null);
-                            let result = client
-                                .request(&method, params)
-                                .await
-                                .map_err(|e| anyhow!("LSP request failed: {}", e))?;
-                            Ok(serde_json::to_string(&result).map_err(|e| anyhow::Error::new(e))?)
-                        }
-                    })
+                    with_bridge(
+                        &bridge,
+                        input.workspace_path.as_deref(),
+                        async move |client| {
+                            if is_notification {
+                                client
+                                    .notify(&method, params)
+                                    .await
+                                    .map_err(|e| anyhow!("LSP notify failed: {}", e))?;
+                                Ok("Notification sent".to_string())
+                            } else {
+                                let params = params.unwrap_or(Value::Null);
+                                let result = client
+                                    .request(&method, params)
+                                    .await
+                                    .map_err(|e| anyhow!("LSP request failed: {}", e))?;
+                                Ok(serde_json::to_string(&result)
+                                    .map_err(|e| anyhow::Error::new(e))?)
+                            }
+                        },
+                    )
                     .await
                 }
             },
