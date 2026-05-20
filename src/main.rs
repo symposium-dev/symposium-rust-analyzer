@@ -1,32 +1,9 @@
+use agent_client_protocol::{ConnectTo, Stdio};
 use anyhow::Result;
-use pico_args::Arguments;
-use sacp::{ByteStreams, ConnectTo};
-use symposium_rust_analyzer::{RustAnalyzerProxy, build_server};
-use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-
-/// Run the proxy as a standalone binary connected to stdio
-async fn run_proxy() -> Result<()> {
-    RustAnalyzerProxy::default()
-        .connect_to(sacp_tokio::Stdio::new())
-        .await?;
-
-    Ok(())
-}
-
-pub async fn run_mcp() -> Result<()> {
-    let mcp = build_server(None).await?;
-    let stido = ByteStreams::new(
-        tokio::io::stdout().compat_write(),
-        tokio::io::stdin().compat(),
-    );
-    mcp.connect_to(stido).await?;
-
-    Ok(())
-}
+use symposium_rust_analyzer::build_server;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -34,16 +11,8 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let mut args = Arguments::from_env();
-    let mcp = args.contains("--mcp");
-    let proxy = args.contains("--proxy");
+    let mcp = build_server(None).await?;
+    mcp.connect_to(Stdio::new()).await?;
 
-    match (mcp, proxy) {
-        (true, false) => run_mcp().await,
-        (false, true) => run_proxy().await,
-        _ => {
-            eprintln!("Usage: symposium-cargo [--mcp | --proxy]");
-            std::process::exit(1);
-        }
-    }
+    Ok(())
 }

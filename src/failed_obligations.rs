@@ -93,7 +93,7 @@ impl FailedObligationsState {
             });
         }
 
-        let goal_index = if candidates.len() > 0 {
+        let goal_index = if !candidates.is_empty() {
             Some(Uuid::new_v4().to_string())
         } else {
             None

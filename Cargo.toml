@@ -3,28 +3,24 @@ name = "symposium-rust-analyzer"
 version = "0.1.1"
 edition = "2024"
 license = "MIT or Apache-2.0"
-description = "Symposium rust-analyzer proxy - an MCP server connecting to rust-analyzer and a ACP Proxy managing it"
+description = "An MCP server providing rust-analyzer LSP integration"
 repository = "https://github.com/symposium-dev/symposium-rust-analyzer"
 readme = "README.md"
 
 
 [dependencies]
+agent-client-protocol = "0.12"
 anyhow = "1.0.100"
 indoc = "2.0.7"
 lsp-types = "0.97"
-pico-args = "0.5.0"
-sacp = "11.0.0"
-sacp-tokio = "11.0.0"
 schemars = "1.1.0"
 serde = "1.0.228"
 serde_json = "1.0.145"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "process", "tracing", "io-util"] }
-tokio-util = "0.7.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 uuid = { version = "1.19.0", features = ["v4"] }
 
 [dev-dependencies]
-elizacp = "12.0.0"
-yopo = "11.0.0"
-sacp-conductor = "11.0.0"
+rmcp = { version = "1.7.0", features = ["client", "transport-async-rw"] }
+tokio-util = { version = "0.7.18", features = ["compat"] }

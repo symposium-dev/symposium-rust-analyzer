@@ -1,7 +1,7 @@
+use agent_client_protocol::mcp_server::McpServer;
+use agent_client_protocol::{Role, RunWithConnectionTo};
 use anyhow::anyhow;
 use lsp_types::{Position, TextDocumentIdentifier, TextDocumentPositionParams, Uri};
-use sacp::mcp_server::McpServer;
-use sacp::{Role, RunWithConnectionTo};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,8 +16,9 @@ use crate::failed_obligations::{
 };
 use crate::lsp_client::LspClient;
 
-pub type Result<T> = std::result::Result<T, sacp::Error>;
+pub type Result<T> = std::result::Result<T, agent_client_protocol::Error>;
 
+#[derive(Default)]
 pub struct BridgeState {
     client: Option<LspClient>,
     opened_documents: HashSet<String>,
@@ -26,11 +27,7 @@ pub struct BridgeState {
 
 impl BridgeState {
     pub fn new() -> Self {
-        Self {
-            client: None,
-            opened_documents: HashSet::new(),
-            document_versions: HashMap::new(),
-        }
+        Self::default()
     }
 }
 
@@ -172,23 +169,21 @@ async fn ensure_document_open(bridge_state: &mut BridgeState, file_path: &str) -
     let uri = file_path_to_uri(file_path)?;
     let uri_str = uri.to_string();
 
-    // Only open if not already opened
-    if !bridge_state.opened_documents.contains(&uri_str) {
-        if let Ok(content) = std::fs::read_to_string(file_path) {
-            if let Some(client) = &bridge_state.client {
-                let version = bridge_state
-                    .document_versions
-                    .get(&uri_str)
-                    .copied()
-                    .unwrap_or(1);
-                client
-                    .did_open(uri.clone(), "rust".to_string(), version, content)
-                    .await
-                    .map_err(|e| anyhow!("Failed to open document: {}", e))?;
-                bridge_state.opened_documents.insert(uri_str.clone());
-                bridge_state.document_versions.insert(uri_str, version);
-            }
-        }
+    if !bridge_state.opened_documents.contains(&uri_str)
+        && let Ok(content) = std::fs::read_to_string(file_path)
+        && let Some(client) = &bridge_state.client
+    {
+        let version = bridge_state
+            .document_versions
+            .get(&uri_str)
+            .copied()
+            .unwrap_or(1);
+        client
+            .did_open(uri.clone(), "rust".to_string(), version, content)
+            .await
+            .map_err(|e| anyhow!("Failed to open document: {}", e))?;
+        bridge_state.opened_documents.insert(uri_str.clone());
+        bridge_state.document_versions.insert(uri_str, version);
     }
 
     Ok(uri)
@@ -227,7 +222,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_definition",
@@ -251,7 +246,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_references",
@@ -275,7 +270,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_completion",
@@ -299,7 +294,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_symbols",
@@ -322,7 +317,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         /*
         .tool_fn_mut(
@@ -346,7 +341,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_code_actions",
@@ -378,7 +373,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         */
         .tool_fn_mut(
@@ -393,7 +388,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         /*
         .tool_fn_mut(
@@ -417,7 +412,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         */
         .tool_fn_mut(
@@ -447,10 +442,10 @@ pub async fn build_server<Counterpart: Role>(
                     )
                     .await?;
 
-                    Ok(serde_json::to_string(&result).map_err(|e| anyhow::Error::new(e))?)
+                    Ok(serde_json::to_string(&result).map_err(anyhow::Error::new)?)
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_failed_obligations_goal",
@@ -470,10 +465,10 @@ pub async fn build_server<Counterpart: Role>(
                     )
                     .await?;
 
-                    Ok(serde_json::to_string(&result).map_err(|e| anyhow::Error::new(e))?)
+                    Ok(serde_json::to_string(&result).map_err(anyhow::Error::new)?)
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_lsp_call",
@@ -501,15 +496,14 @@ pub async fn build_server<Counterpart: Role>(
                                     .request(&method, params)
                                     .await
                                     .map_err(|e| anyhow!("LSP request failed: {}", e))?;
-                                Ok(serde_json::to_string(&result)
-                                    .map_err(|e| anyhow::Error::new(e))?)
+                                Ok(serde_json::to_string(&result).map_err(anyhow::Error::new)?)
                             }
                         },
                     )
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .build();
 
