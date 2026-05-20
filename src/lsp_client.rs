@@ -60,7 +60,7 @@ impl LspClient {
                 let mut reader = BufReader::new(stderr);
 
                 let mut string = String::new();
-                while let Ok(_) = reader.read_line(&mut string).await {
+                while reader.read_line(&mut string).await.is_ok() {
                     if string.is_empty() {
                         break;
                     }
@@ -264,13 +264,18 @@ impl LspClient {
     /// If the callback returns an `Err(e)`, then this function returns an `Err(e)`.
     /// If the callback returns an `Ok(None)`, then this function does not return (yet).
     /// If the callback returns an `Ok(Some(value))`, then this function returns `Ok(value)` and the notification is unsubscribed.
-    pub fn subscribe_notification<R: Send + 'static, F: Send + Sync + Clone + 'static>(
+    pub fn subscribe_notification<R, F>(
         &self,
         method: String,
         callback: F,
     ) -> impl Future<Output = Result<R>> + use<'_, R, F>
     where
-        F: Fn(Value) -> Pin<Box<dyn Future<Output = Result<Option<R>>> + Send>>,
+        R: Send + 'static,
+        F: Fn(Value) -> Pin<Box<dyn Future<Output = Result<Option<R>>> + Send>>
+            + Send
+            + Sync
+            + Clone
+            + 'static,
     {
         let (response_tx, response_rx) = oneshot::channel();
         let response_tx = Arc::new(Mutex::new(Some(response_tx)));
@@ -302,8 +307,7 @@ impl LspClient {
             notifs.push(Box::new(f));
             drop(notifs_lock);
 
-            let response = response_rx.await?;
-            response
+            response_rx.await?
         }
     }
 
@@ -594,6 +598,6 @@ impl LspClient {
 
 impl Drop for LspClient {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        let _ = self.child.start_kill();
     }
 }
