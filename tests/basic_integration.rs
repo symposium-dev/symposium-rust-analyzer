@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use sacp::Agent;
-use sacp_conductor::{ConductorImpl, ProxiesAndAgent};
-use symposium_rust_analyzer::RustAnalyzerProxy;
+use rmcp::ServiceExt;
+use rmcp::model::CallToolRequestParams;
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -28,33 +28,64 @@ fn get_test_file_path() -> String {
         .to_string()
 }
 
-async fn create_conductor() -> ConductorImpl<Agent> {
-    init_tracing();
+/// Spin up the MCP server and connect an rmcp client to it.
+/// Returns the running client whose `.peer()` can call tools.
+async fn create_mcp_client() -> rmcp::service::RunningService<rmcp::RoleClient, ()> {
     let test_project = get_test_project_path();
-    let proxy = RustAnalyzerProxy {
-        workspace_path: Some(test_project.display().to_string()),
-    };
-
-    ConductorImpl::new_agent(
-        "test-conductor".to_string(),
-        ProxiesAndAgent::new(elizacp::ElizaAgent::new(true)).proxy(proxy),
-        Default::default(),
+    let server = symposium_rust_analyzer::build_server::<agent_client_protocol::role::mcp::Client>(
+        Some(test_project.display().to_string()),
     )
+    .await
+    .expect("failed to build MCP server");
+
+    let (server_stream, client_stream) = tokio::io::duplex(8192);
+    let (server_read, server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+
+    // Spawn the MCP server in the background
+    tokio::spawn(async move {
+        use agent_client_protocol::{ByteStreams, ConnectTo};
+        let transport = ByteStreams::new(server_write.compat_write(), server_read.compat());
+        server.connect_to(transport).await
+    });
+
+    // Connect the rmcp client
+    ().serve((client_read, client_write))
+        .await
+        .expect("failed to connect rmcp client")
+}
+
+/// Call a tool and return the text content from the result.
+async fn call_tool(
+    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    name: &str,
+    args: serde_json::Value,
+) -> String {
+    let params = CallToolRequestParams::new(name.to_string())
+        .with_arguments(args.as_object().unwrap().clone());
+
+    let result = client.peer().call_tool(params).await.unwrap();
+
+    result
+        .content
+        .iter()
+        .filter_map(|c| c.raw.as_text().map(|t| t.text.as_str()))
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 #[tokio::test]
 async fn test_rust_analyzer_set_workspace() -> Result<()> {
+    init_tracing();
+    let client = create_mcp_client().await;
     let test_project = get_test_project_path();
-    let conductor = create_conductor().await;
 
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_set_workspace with {{ "workspace_path": "{}" }}"#,
-            test_project.display()
-        ),
+    let result = call_tool(
+        &client,
+        "rust_analyzer_set_workspace",
+        serde_json::json!({ "workspace_path": test_project.display().to_string() }),
     )
-    .await?;
+    .await;
 
     assert!(result.contains("Workspace set successfully"));
     Ok(())
@@ -62,17 +93,16 @@ async fn test_rust_analyzer_set_workspace() -> Result<()> {
 
 #[tokio::test]
 async fn test_rust_analyzer_hover() -> Result<()> {
-    let conductor = create_conductor().await;
+    init_tracing();
+    let client = create_mcp_client().await;
     let file_path = get_test_file_path();
 
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_hover with {{ "file_path": "{}", "line": 3, "character": 11 }}"#,
-            file_path
-        ),
+    let result = call_tool(
+        &client,
+        "rust_analyzer_hover",
+        serde_json::json!({ "file_path": file_path, "line": 3, "character": 11 }),
     )
-    .await?;
+    .await;
 
     assert!(result.contains("name: String"));
     Ok(())
@@ -80,17 +110,16 @@ async fn test_rust_analyzer_hover() -> Result<()> {
 
 #[tokio::test]
 async fn test_rust_analyzer_definition() -> Result<()> {
-    let conductor = create_conductor().await;
+    init_tracing();
+    let client = create_mcp_client().await;
     let file_path = get_test_file_path();
 
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_definition with {{ "file_path": "{}", "line": 0, "character": 25 }}"#,
-            file_path
-        ),
+    let result = call_tool(
+        &client,
+        "rust_analyzer_definition",
+        serde_json::json!({ "file_path": file_path, "line": 0, "character": 25 }),
     )
-    .await?;
+    .await;
 
     assert!(result.contains("src/collections/hash/map.rs"));
     Ok(())
@@ -98,18 +127,16 @@ async fn test_rust_analyzer_definition() -> Result<()> {
 
 #[tokio::test]
 async fn test_rust_analyzer_references() -> Result<()> {
-    let conductor = create_conductor().await;
+    init_tracing();
+    let client = create_mcp_client().await;
     let file_path = get_test_file_path();
 
-    // Test finding references to Person struct
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_references with {{ "file_path": "{}", "line": 3, "character": 11 }}"#,
-            file_path
-        ),
+    let result = call_tool(
+        &client,
+        "rust_analyzer_references",
+        serde_json::json!({ "file_path": file_path, "line": 3, "character": 11 }),
     )
-    .await?;
+    .await;
 
     assert!(result.contains("test-project/src/main.rs"));
     Ok(())
@@ -117,17 +144,16 @@ async fn test_rust_analyzer_references() -> Result<()> {
 
 #[tokio::test]
 async fn test_rust_analyzer_completion() -> Result<()> {
-    let conductor = create_conductor().await;
+    init_tracing();
+    let client = create_mcp_client().await;
     let file_path = get_test_file_path();
 
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_completion with {{ "file_path": "{}", "line": 99, "character": 29 }}"#,
-            file_path
-        ),
+    let result = call_tool(
+        &client,
+        "rust_analyzer_completion",
+        serde_json::json!({ "file_path": file_path, "line": 99, "character": 29 }),
     )
-    .await?;
+    .await;
 
     assert!(result.contains("greet"));
     Ok(())
@@ -135,92 +161,38 @@ async fn test_rust_analyzer_completion() -> Result<()> {
 
 #[tokio::test]
 async fn test_rust_analyzer_symbols() -> Result<()> {
-    let conductor = create_conductor().await;
+    init_tracing();
+    let client = create_mcp_client().await;
     let file_path = get_test_file_path();
 
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_symbols with {{ "file_path": "{}" }}"#,
-            file_path
-        ),
+    let result = call_tool(
+        &client,
+        "rust_analyzer_symbols",
+        serde_json::json!({ "file_path": file_path }),
     )
-    .await?;
+    .await;
 
     assert!(result.contains("Person"));
     Ok(())
 }
 
-/*
-#[tokio::test]
-async fn test_rust_analyzer_format() -> Result<()> {
-    let conductor = create_conductor().await;
-    let file_path = get_test_file_path();
-
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_format with {{ "file_path": "{}" }}"#,
-            file_path
-        ),
-    )
-    .await?;
-
-    assert!(result.contains("is_error: Some(false)"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_rust_analyzer_code_actions() -> Result<()> {
-    let conductor = create_conductor().await;
-    let file_path = get_test_file_path();
-
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_code_actions with {{ "file_path": "{}", "line": 104, "character": 4, "end_line": 104, "end_character": 20 }}"#,
-            file_path
-        ),
-    )
-    .await?;
-
-    assert!(result.contains("structured_content"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_rust_analyzer_diagnostics() -> Result<()> {
-    let conductor = create_conductor().await;
-    let file_path = get_test_file_path();
-
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_diagnostics with {{ "file_path": "{}" }}"#,
-            file_path
-        ),
-    )
-    .await?;
-
-    dbg!(&result);
-    assert!(result.contains("structured_content"));
-    Ok(())
-}
-*/
-
 #[tokio::test]
 async fn test_rust_analyzer_lsp_call_notification() -> Result<()> {
-    let conductor = create_conductor().await;
+    init_tracing();
+    let client = create_mcp_client().await;
     let test_project = get_test_project_path();
 
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_lsp_call with {{ "method": "window/logMessage", "params": {{ "type": 1, "message": "hello from test" }}, "is_notification": true, "workspace_path": "{}" }}"#,
-            test_project.display()
-        ),
+    let result = call_tool(
+        &client,
+        "rust_analyzer_lsp_call",
+        serde_json::json!({
+            "method": "window/logMessage",
+            "params": { "type": 1, "message": "hello from test" },
+            "is_notification": true,
+            "workspace_path": test_project.display().to_string()
+        }),
     )
-    .await?;
+    .await;
 
     assert!(result.contains("Notification sent"));
     Ok(())
@@ -228,50 +200,17 @@ async fn test_rust_analyzer_lsp_call_notification() -> Result<()> {
 
 #[tokio::test]
 async fn test_rust_analyzer_failed_obligations() -> Result<()> {
-    let conductor = create_conductor().await;
+    init_tracing();
+    let client = create_mcp_client().await;
     let file_path = get_test_file_path();
 
-    let result = yopo::prompt(
-        conductor,
-        &format!(
-            r#"Use tool rust-analyzer-mcp::rust_analyzer_failed_obligations with {{ "file_path": "{}", "line": 45, "character": 5 }}"#,
-            file_path
-        ),
+    let result = call_tool(
+        &client,
+        "rust_analyzer_failed_obligations",
+        serde_json::json!({ "file_path": file_path, "line": 45, "character": 5 }),
     )
-    .await?;
+    .await;
 
     assert!(result.contains("goal_index"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_direct_bridge_hover() -> Result<()> {
-    use lsp_types::Position;
-    use std::sync::Arc;
-    use symposium_rust_analyzer::{BridgeState, BridgeType, with_bridge_and_document};
-    use tokio::sync::Mutex;
-
-    init_tracing();
-    let test_project = get_test_project_path();
-    let file_path = get_test_file_path();
-
-    let bridge: BridgeType = Arc::new(Mutex::new(BridgeState::new()));
-
-    let result = with_bridge_and_document(
-        &bridge,
-        Some(&test_project.display().to_string()),
-        &file_path,
-        async move |lsp, uri| {
-            let position = Position::new(3, 11); // Person struct
-            let hover_result = lsp
-                .hover(uri, position)
-                .await
-                .map_err(|e| anyhow::anyhow!("Hover request failed: {}", e))?;
-            Ok(serde_json::to_string(&hover_result)?)
-        },
-    )
-    .await?;
-
-    assert!(result.contains("contents"));
     Ok(())
 }

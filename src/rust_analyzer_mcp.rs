@@ -1,7 +1,7 @@
+use agent_client_protocol::mcp_server::McpServer;
+use agent_client_protocol::{Role, RunWithConnectionTo};
 use anyhow::anyhow;
 use lsp_types::{Position, TextDocumentIdentifier, TextDocumentPositionParams, Uri};
-use sacp::mcp_server::McpServer;
-use sacp::{Role, RunWithConnectionTo};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,7 +16,7 @@ use crate::failed_obligations::{
 };
 use crate::lsp_client::LspClient;
 
-pub type Result<T> = std::result::Result<T, sacp::Error>;
+pub type Result<T> = std::result::Result<T, agent_client_protocol::Error>;
 
 pub struct BridgeState {
     client: Option<LspClient>,
@@ -227,7 +227,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_definition",
@@ -251,7 +251,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_references",
@@ -275,7 +275,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_completion",
@@ -299,7 +299,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_symbols",
@@ -322,7 +322,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         /*
         .tool_fn_mut(
@@ -346,7 +346,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_code_actions",
@@ -378,7 +378,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         */
         .tool_fn_mut(
@@ -393,7 +393,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         /*
         .tool_fn_mut(
@@ -417,7 +417,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         */
         .tool_fn_mut(
@@ -450,7 +450,7 @@ pub async fn build_server<Counterpart: Role>(
                     Ok(serde_json::to_string(&result).map_err(|e| anyhow::Error::new(e))?)
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_failed_obligations_goal",
@@ -473,7 +473,7 @@ pub async fn build_server<Counterpart: Role>(
                     Ok(serde_json::to_string(&result).map_err(|e| anyhow::Error::new(e))?)
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .tool_fn_mut(
             "rust_analyzer_lsp_call",
@@ -509,7 +509,7 @@ pub async fn build_server<Counterpart: Role>(
                     .await
                 }
             },
-            sacp::tool_fn_mut!(),
+            agent_client_protocol::tool_fn_mut!(),
         )
         .build();
 
